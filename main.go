@@ -189,6 +189,8 @@ func main() {
 
 		rules.Init()
 
+		log.WithFields(log.Fields{"rules": rules}).Debug("load rules")
+
 		allowedHeaders := c.StringSlice("allowed-headers")
 		allowedHosts := c.StringSlice("allowed-hosts")
 		allowedMethods := c.StringSlice("allowed-methods")
@@ -220,6 +222,10 @@ func main() {
 				},
 			},
 		}
+	})
+
+	app.Main(func(conf *server.Config) {
+		log.With(conf).Debug("load config")
 	})
 
 	app.Provider(server.Provider{})

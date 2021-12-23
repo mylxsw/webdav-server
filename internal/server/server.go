@@ -60,6 +60,12 @@ func (server *Server) Start(ctx context.Context) {
 }
 
 func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.WithFields(log.Fields{
+		"headers": r.Header,
+		"url":     r.RequestURI,
+		"method":  r.Method,
+	}).Debug("http request received")
+
 	reqOrigin := r.Header.Get("Origin")
 	if server.conf.Cors.Enabled && reqOrigin != "" {
 		headers := w.Header()
@@ -102,12 +108,14 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Gets the correct user for this request.
 		username, password, ok := r.BasicAuth()
 		if !ok {
+			log.WithFields(log.Fields{"username": username}).Debug("not authorized: no auth header")
 			http.Error(w, "Not authorized", http.StatusUnauthorized)
 			return
 		}
 
 		user, err := server.auth.Login(username, password)
 		if err != nil {
+			log.WithFields(log.Fields{"username": username}).Debugf("not authorized: %v", err)
 			http.Error(w, "Not authorized", http.StatusUnauthorized)
 			return
 		}
@@ -133,6 +141,7 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Method == "DELETE"
 
 	if !currentUser.Allowed(r.URL.Path, noModification) {
+		log.WithFields(log.Fields{"user": currentUser}).Debugf("user %s not allowed to access %s", currentUser.Username, r.URL.Path)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}

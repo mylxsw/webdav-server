@@ -1,8 +1,8 @@
-BIN := "webdav-server"
+BIN := webdav-server
 LDFLAGS := -s -w -X main.Version=$(shell date "+%Y%m%d%H%M") -X main.GitCommit=$(shell git rev-parse HEAD)
 
 run: build
-	./build/debug/$(BIN) --auth 
+	./build/debug/$(BIN) --debug --auth
 
 build: 
 	go build -race -ldflags "$(LDFLAGS)" -o build/debug/$(BIN) main.go
