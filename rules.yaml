@@ -1,0 +1,5 @@
+
+prefix: "/"
+scope: "."
+no-sniff: false
+modify: true
