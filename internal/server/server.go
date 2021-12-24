@@ -127,18 +127,18 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Checks for user permissions relatively to this PATH.
-	noModification := r.Method == "GET" ||
-		r.Method == "HEAD" ||
-		r.Method == "OPTIONS" ||
-		r.Method == "PROPFIND" ||
-		r.Method == "PUT" ||
-		r.Method == "LOCK" ||
-		r.Method == "UNLOCK" ||
-		r.Method == "MOVE" ||
-		r.Method == "DELETE"
+	readonlyRequest := str.InIgnoreCase(r.Method, []string{"GET", "HEAD", "OPTIONS", "PROPFIND"})
+	requestPath := strings.TrimPrefix(r.URL.Path, currentUser.Handler.Prefix)
 
-	if !currentUser.Allowed(r.URL.Path, noModification) {
-		log.WithFields(log.Fields{"user": currentUser}).Debugf("user %s not allowed to access %s", currentUser.Username, r.URL.Path)
+	pathAccessMode := server.conf.AccessMode(requestPath)
+	if pathAccessMode == "" || (!readonlyRequest && pathAccessMode == "R") {
+		log.WithFields(log.Fields{"user": currentUser, "path_access_mode": pathAccessMode}).Debugf("path %s not allowed to access", r.URL.Path)
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	if !currentUser.Allowed(pathAccessMode, requestPath, readonlyRequest) {
+		log.WithFields(log.Fields{"user": currentUser, "path_access_mode": pathAccessMode}).Debugf("user %s not allowed to access %s", currentUser.Username, r.URL.Path)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -195,7 +195,7 @@ func (server *Server) isAllowedHost(allowedHosts []string, origin string) bool {
 	return false
 }
 
-// responseWriterNoBody is a wrapper used to suprress the body of the response
+// responseWriterNoBody is a wrapper used to suppress the body of the response
 // to a request. Mainly used for HEAD requests.
 type responseWriterNoBody struct {
 	http.ResponseWriter

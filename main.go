@@ -35,24 +35,35 @@ var Version = "1.0"
 var GitCommit = "5dbef13fb456f51a5d29464d"
 
 type Rules struct {
-	Rules   []*server.Rule `json:"rules,omitempty" yaml:"rules,omitempty"`
-	Prefix  string         `json:"prefix,omitempty" yaml:"prefix,omitempty"`
-	NoSniff bool           `json:"no_sniff,omitempty" yaml:"no_sniff,omitempty"`
-	Scope   string         `json:"scope,omitempty" yaml:"scope,omitempty"`
-	Modify  bool           `json:"modify,omitempty" yaml:"modify,omitempty"`
+	Rules      []server.Rule `json:"rules,omitempty" yaml:"rules,omitempty"`
+	UserRules  []UserRule    `json:"userRules,omitempty" yaml:"userRules,omitempty"`
+	Prefix     string        `json:"prefix,omitempty" yaml:"prefix,omitempty"`
+	NoSniff    bool          `json:"noSniff,omitempty" yaml:"noSniff,omitempty"`
+	Scope      string        `json:"scope,omitempty" yaml:"scope,omitempty"`
+	Access     string        `json:"access,omitempty" yaml:"access,omitempty"`
+	UserAccess string        `json:"userAccess,omitempty" yaml:"userAccess,omitempty"`
 }
 
-func (rules *Rules) Init() {
-	for _, rule := range rules.Rules {
-		rule.Init()
-	}
+type UserRule struct {
+	Regex  bool     `json:"regex,omitempty" yaml:"regex,omitempty"`
+	Access string   `json:"access,omitempty" yaml:"access,omitempty"`
+	Path   string   `json:"path,omitempty" yaml:"path,omitempty"`
+	Users  []string `json:"users,omitempty" yaml:"users,omitempty"`
+}
 
-	if rules.Prefix == "" {
-		rules.Prefix = ""
-	}
+func (rules Rules) Init() Rules {
+	rules.Access = strings.ToUpper(rules.Access)
+	rules.UserAccess = strings.ToUpper(rules.UserAccess)
+
 	if rules.Scope == "" {
 		rules.Scope = "."
 	}
+
+	for i, rule := range rules.Rules {
+		rules.Rules[i] = rule.Init()
+	}
+
+	return rules
 }
 
 func main() {
@@ -206,7 +217,7 @@ func main() {
 			panic(err)
 		}
 
-		rules.Init()
+		rules = rules.Init()
 
 		log.WithFields(log.Fields{"rules": rules}).Debug("load rules")
 
@@ -215,10 +226,28 @@ func main() {
 		allowedMethods := c.StringSlice("allowed-methods")
 		exposeHeaders := c.StringSlice("exposed-headers")
 
+		userRules := make(map[string][]server.Rule)
+		for _, rule := range rules.UserRules {
+			for _, u := range rule.Users {
+				if _, ok := userRules[u]; !ok {
+					userRules[u] = make([]server.Rule, 0)
+				}
+
+				userRules[u] = append(userRules[u], server.Rule{
+					Access: rule.Access,
+					Path:   rule.Path,
+					Regex:  rule.Regex,
+				}.Init())
+			}
+		}
+
 		return &server.Config{
 			Prefix:      rules.Prefix,
 			AuthEnabled: authType != "none",
 			NoSniff:     rules.NoSniff,
+			Rules:       rules.Rules,
+			UserRules:   userRules,
+			Access:      rules.Access,
 			Cors: server.CorsConfig{
 				Enabled:        c.Bool("cors"),
 				Credentials:    c.Bool("cors-credentials"),
@@ -229,8 +258,7 @@ func main() {
 			},
 			DefaultUser: server.User{
 				Scope:  rules.Scope,
-				Modify: rules.Modify,
-				Rules:  rules.Rules,
+				Access: rules.UserAccess,
 				Handler: &webdav.Handler{
 					Prefix: rules.Prefix,
 					FileSystem: server.WebDavDir{
