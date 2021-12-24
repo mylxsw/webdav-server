@@ -20,6 +20,7 @@ import (
 	"github.com/mylxsw/go-utils/str"
 	"github.com/mylxsw/webdav-server/internal/auth/ldap"
 	"github.com/mylxsw/webdav-server/internal/auth/local"
+	"github.com/mylxsw/webdav-server/internal/auth/misc"
 	"github.com/mylxsw/webdav-server/internal/auth/none"
 	"github.com/mylxsw/webdav-server/internal/cache/memory"
 	"github.com/mylxsw/webdav-server/internal/server"
@@ -247,7 +248,7 @@ func main() {
 	})
 
 	app.Provider(server.Provider{}, service.Provider{})
-	app.Provider(ldap.Provider{}, none.Provider{}, local.Provider{})
+	app.Provider(ldap.Provider{}, none.Provider{}, local.Provider{}, misc.Provider{})
 	app.Provider(memory.Provider{})
 
 	if err := app.Run(os.Args); err != nil {
