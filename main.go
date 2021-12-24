@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mylxsw/asteria/formatter"
@@ -16,8 +17,13 @@ import (
 	"github.com/mylxsw/container"
 	"github.com/mylxsw/glacier/infra"
 	"github.com/mylxsw/glacier/starter/application"
+	"github.com/mylxsw/go-utils/str"
 	"github.com/mylxsw/webdav-server/internal/auth/ldap"
+	"github.com/mylxsw/webdav-server/internal/auth/local"
+	"github.com/mylxsw/webdav-server/internal/auth/none"
+	"github.com/mylxsw/webdav-server/internal/cache/memory"
 	"github.com/mylxsw/webdav-server/internal/server"
+	"github.com/mylxsw/webdav-server/internal/service"
 	"github.com/urfave/cli"
 	"github.com/urfave/cli/altsrc"
 	"golang.org/x/net/webdav"
@@ -41,7 +47,7 @@ func (rules *Rules) Init() {
 	}
 
 	if rules.Prefix == "" {
-		rules.Prefix = "/"
+		rules.Prefix = ""
 	}
 	if rules.Scope == "" {
 		rules.Scope = "."
@@ -59,43 +65,60 @@ func main() {
 		Name:  "debug",
 		Usage: "是否使用调试模式，调试模式下，静态资源使用本地文件",
 	}))
+	app.AddFlags(altsrc.NewBoolFlag(cli.BoolFlag{
+		Name:  "log-json",
+		Usage: "日志以 json 格式输出",
+	}))
 	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
-		Name:  "log_path",
+		Name:  "log-path",
 		Usage: "日志文件输出目录（非文件名），默认为空，输出到标准输出",
 	}))
 
 	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
-		Name:   "ldap_url",
+		Name:  "cache-driver",
+		Usage: "缓存驱动，当前仅支持 memory",
+		Value: "memory",
+	}))
+
+	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
+		Name:   "ldap-url",
 		Usage:  "LDAP 服务器地址",
 		Value:  "ldap://127.0.0.1:389",
 		EnvVar: "LDAP_URL",
 	}))
 	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
-		Name:   "ldap_username",
+		Name:   "ldap-username",
 		Usage:  "LDAP 账号",
 		EnvVar: "LDAP_USER",
 	}))
 	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
-		Name:   "ldap_password",
+		Name:   "ldap-password",
 		Usage:  "LDAP 密码",
 		EnvVar: "LDAP_PASSWORD",
 	}))
 	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
-		Name:   "ldap_base_dn",
+		Name:   "ldap-basedn",
 		Usage:  "LDAP base dn",
 		Value:  "dc=example,dc=com",
 		EnvVar: "LDAP_BASE_DN",
 	}))
 	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
-		Name:   "ldap_user_filter",
+		Name:   "ldap-filter",
 		Usage:  "LDAP user filter",
 		Value:  "CN=all-staff,CN=Users,DC=example,DC=com",
 		EnvVar: "LDAP_USER_FILTER",
 	}))
 
-	app.AddFlags(altsrc.NewBoolFlag(cli.BoolFlag{
+	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
 		Name:  "auth",
-		Usage: "enable auth",
+		Usage: "auth type: none|ldap|local|misc",
+		Value: "none",
+	}))
+
+	app.AddFlags(altsrc.NewStringFlag(cli.StringFlag{
+		Name:  "local-users",
+		Usage: "本地用户来源配置文件",
+		Value: "local-users.yaml",
 	}))
 
 	app.AddFlags(altsrc.NewBoolFlag(cli.BoolFlag{
@@ -136,13 +159,16 @@ func main() {
 				log.All().LogLevel(level.Info)
 			}
 
-			logPath := c.String("log_path")
+			if c.Bool("log-json") {
+				log.All().LogFormatter(formatter.NewJSONFormatter())
+			}
+
+			logPath := c.String("log-path")
 			if logPath == "" {
 				stackWriter.PushWithLevels(writer.NewStdoutWriter())
 				return
 			}
 
-			log.All().LogFormatter(formatter.NewJSONFormatter())
 			stackWriter.PushWithLevels(writer.NewDefaultRotatingFileWriter(ctx, func(le level.Level, module string) string {
 				return filepath.Join(logPath, fmt.Sprintf("%s-%s.log", time.Now().Format("20060102"), le.GetLevelName()))
 			}))
@@ -163,20 +189,12 @@ func main() {
 		return net.Listen("tcp", c.String("listen"))
 	})
 
-	app.Singleton(func(c infra.FlagContext) *ldap.Config {
-		return &ldap.Config{
-			URL:         c.String("ldap_url"),
-			BaseDN:      c.String("ldap_base_dn"),
-			Username:    c.String("ldap_username"),
-			Password:    c.String("ldap_password"),
-			DisplayName: "displayName",
-			UID:         "sAMAccountName",
-			UserFilter:  c.String("ldap_user_filter"),
-		}
-	})
-	app.Singleton(ldap.New)
-
 	app.Singleton(func(c infra.FlagContext) *server.Config {
+		authType := strings.ToLower(c.String("auth"))
+		if !str.InIgnoreCase(authType, []string{"none", "ldap", "local", "misc"}) {
+			panic("invalid argument auth")
+		}
+
 		data, err := ioutil.ReadFile(c.String("rules"))
 		if err != nil {
 			panic(fmt.Errorf("rules file %s does not exist: %v", c.String("rules"), err))
@@ -198,7 +216,7 @@ func main() {
 
 		return &server.Config{
 			Prefix:      rules.Prefix,
-			AuthEnabled: c.Bool("auth"),
+			AuthEnabled: authType != "none",
 			NoSniff:     rules.NoSniff,
 			Cors: server.CorsConfig{
 				Enabled:        c.Bool("cors"),
@@ -228,7 +246,9 @@ func main() {
 		log.With(conf).Debug("load config")
 	})
 
-	app.Provider(server.Provider{})
+	app.Provider(server.Provider{}, service.Provider{})
+	app.Provider(ldap.Provider{}, none.Provider{}, local.Provider{})
+	app.Provider(memory.Provider{})
 
 	if err := app.Run(os.Args); err != nil {
 		log.Errorf("exit with error: %s", err)

@@ -6,6 +6,7 @@ import (
 
 	lp "github.com/go-ldap/ldap/v3"
 	"github.com/google/uuid"
+	"github.com/mylxsw/asteria/log"
 	"github.com/mylxsw/webdav-server/internal/auth"
 )
 
@@ -20,22 +21,17 @@ type Config struct {
 }
 
 type Auth struct {
-	conf *Config
-}
-
-func (provider *Auth) CanRegister() bool {
-	return false
-}
-
-func (provider *Auth) Register(username, password string) (*auth.AuthedUser, error) {
-	return nil, fmt.Errorf("user register is not supported in ldap mode")
+	conf   *Config
+	logger log.Logger
 }
 
 func New(conf *Config) auth.Auth {
-	return &Auth{conf: conf}
+	return &Auth{conf: conf, logger: log.Module("auth:ldap")}
 }
 
 func (provider *Auth) GetUser(username string) (*auth.AuthedUser, error) {
+	log.WithFields(log.Fields{"username": username}).Debugf("ldap get user")
+
 	conf := provider.conf
 
 	l, err := lp.DialURL(conf.URL)
@@ -80,6 +76,8 @@ func (provider *Auth) GetUser(username string) (*auth.AuthedUser, error) {
 }
 
 func (provider *Auth) Login(username, password string) (*auth.AuthedUser, error) {
+	log.WithFields(log.Fields{"username": username}).Debugf("ldap user login")
+
 	conf := provider.conf
 
 	l, err := lp.DialURL(conf.URL)

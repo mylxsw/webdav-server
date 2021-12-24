@@ -79,14 +79,7 @@ func authUserToWebdavUser(authed auth.AuthedUser, conf *Config) User {
 		Rules:    conf.DefaultUser.Rules,
 	}
 
-	user.Handler = &webdav.Handler{
-		Prefix: conf.DefaultUser.Handler.Prefix,
-		FileSystem: WebDavDir{
-			Dir:     webdav.Dir(user.Scope),
-			NoSniff: conf.NoSniff,
-		},
-		LockSystem: webdav.NewMemLS(),
-	}
+	user.Handler = conf.DefaultUser.Handler
 
 	return user
 }

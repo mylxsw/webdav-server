@@ -1,5 +1,5 @@
 
-prefix: "/"
-scope: "."
+prefix: ""
+scope: "/Users/mylxsw"
 no-sniff: false
 modify: true

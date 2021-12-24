@@ -9,19 +9,21 @@ import (
 
 	"github.com/mylxsw/asteria/log"
 	"github.com/mylxsw/glacier/infra"
-	"github.com/mylxsw/webdav-server/internal/auth"
+	"github.com/mylxsw/go-utils/str"
+	"github.com/mylxsw/webdav-server/internal/service"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
 	conf     *Config
-	auth     auth.Auth
+	authSrv  service.AuthService
 	listener net.Listener
 	resolver infra.Resolver
+	auditLog log.Logger
 }
 
-func New(resolver infra.Resolver, conf *Config, auth auth.Auth, listener net.Listener) *Server {
-	return &Server{conf: conf, auth: auth, resolver: resolver, listener: listener}
+func New(resolver infra.Resolver, conf *Config, authSrv service.AuthService, listener net.Listener) *Server {
+	return &Server{conf: conf, authSrv: authSrv, resolver: resolver, listener: listener, auditLog: log.Module("audit")}
 }
 
 func (server *Server) Start(ctx context.Context) {
@@ -60,11 +62,6 @@ func (server *Server) Start(ctx context.Context) {
 }
 
 func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.WithFields(log.Fields{
-		"headers": r.Header,
-		"url":     r.RequestURI,
-		"method":  r.Method,
-	}).Debug("http request received")
 
 	reqOrigin := r.Header.Get("Origin")
 	if server.conf.Cors.Enabled && reqOrigin != "" {
@@ -113,7 +110,7 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		user, err := server.auth.Login(username, password)
+		user, err := server.authSrv.Login(username, password)
 		if err != nil {
 			log.WithFields(log.Fields{"username": username}).Debugf("not authorized: %v", err)
 			http.Error(w, "Not authorized", http.StatusUnauthorized)
@@ -123,7 +120,7 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		currentUser = authUserToWebdavUser(*user, server.conf)
 	} else {
 		if username, _, ok := r.BasicAuth(); ok {
-			if user, err := server.auth.GetUser(username); err == nil {
+			if user, err := server.authSrv.GetUser(username); err == nil {
 				currentUser = authUserToWebdavUser(*user, server.conf)
 			}
 		}
@@ -149,6 +146,22 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "HEAD" {
 		w = newResponseWriterNoBody(w)
 	}
+
+	headers := make(map[string]string)
+	for k, v := range r.Header {
+		if str.InIgnoreCase(k, []string{"Authorization", "Accept-Language", "Content-Length", "Accept", "Connection", "Accept-Encoding", "Content-Type"}) {
+			continue
+		}
+
+		headers[k] = strings.Join(v, ", ")
+	}
+
+	server.auditLog.WithFields(log.Fields{
+		"method":  r.Method,
+		"url":     r.RequestURI,
+		"user":    currentUser.Username,
+		"headers": headers,
+	}).Infof("%s %s %s", currentUser.Username, r.Method, r.RequestURI)
 
 	// Excerpt from RFC4918, section 9.4:
 	//
