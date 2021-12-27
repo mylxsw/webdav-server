@@ -156,12 +156,17 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		headers[k] = strings.Join(v, ", ")
 	}
 
-	server.auditLog.WithFields(log.Fields{
+	logFields := log.Fields{
 		"method":  r.Method,
 		"url":     r.RequestURI,
 		"user":    currentUser.Username,
 		"headers": headers,
-	}).Infof("%s %s %s", currentUser.Username, r.Method, r.RequestURI)
+	}
+	if readonlyRequest {
+		server.auditLog.WithFields(logFields).Debugf("%s %s %s", currentUser.Username, r.Method, r.RequestURI)
+	} else {
+		server.auditLog.WithFields(logFields).Infof("%s %s %s", currentUser.Username, r.Method, r.RequestURI)
+	}
 
 	// Excerpt from RFC4918, section 9.4:
 	//

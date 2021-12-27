@@ -3,6 +3,7 @@ package ldap
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	lp "github.com/go-ldap/ldap/v3"
 	"github.com/google/uuid"
@@ -30,99 +31,75 @@ func New(conf *Config) auth.Auth {
 }
 
 func (provider *Auth) GetUser(username string) (*auth.AuthedUser, error) {
+	return provider.getUser(username, nil)
+}
+
+func (provider *Auth) getUser(username string, cb func(l *lp.Conn, user *auth.AuthedUser) error) (*auth.AuthedUser, error) {
 	log.WithFields(log.Fields{"username": username}).Debugf("ldap get user")
 
-	conf := provider.conf
+	res, err := provider.getConnection(func(l *lp.Conn) (interface{}, error) {
+		searchReq := lp.NewSearchRequest(
+			provider.conf.BaseDN,
+			lp.ScopeWholeSubtree,
+			lp.NeverDerefAliases,
+			0,
+			0,
+			false,
+			fmt.Sprintf("(&(objectClass=organizationalPerson)(%s=%s))", provider.conf.UID, lp.EscapeFilter(username)),
+			[]string{"objectguid", provider.conf.UID, provider.conf.DisplayName, "userAccountControl"},
+			nil,
+		)
 
-	l, err := lp.DialURL(conf.URL)
+		sr, err := l.Search(searchReq)
+		if err != nil {
+			return nil, fmt.Errorf("LDAP 用户查询失败: %w", err)
+		}
+
+		if len(sr.Entries) != 1 {
+			return nil, fmt.Errorf("用户不存在")
+		}
+
+		// 514-禁用 512-启用
+		if sr.Entries[0].GetAttributeValue("userAccountControl") == "514" {
+			return nil, errors.New("LDAP 用户账户已禁用")
+		}
+
+		authedUser := buildAuthedUserFromLDAPEntry(provider.conf, sr.Entries[0])
+
+		if cb != nil {
+			if err := cb(l, &authedUser); err != nil {
+				return nil, err
+			}
+		}
+
+		return &authedUser, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return res.(*auth.AuthedUser), nil
+}
+
+func (provider *Auth) getConnection(cb func(l *lp.Conn) (interface{}, error)) (interface{}, error) {
+	l, err := lp.DialURL(provider.conf.URL)
 	if err != nil {
 		return nil, fmt.Errorf("无法连接 LDAP 服务器: %w", err)
 	}
-
 	defer l.Close()
 
-	if err := l.Bind(conf.Username, conf.Password); err != nil {
+	l.SetTimeout(5 * time.Second)
+	if err := l.Bind(provider.conf.Username, provider.conf.Password); err != nil {
 		return nil, fmt.Errorf("LDAP 服务器鉴权失败: %w", err)
 	}
 
-	searchReq := lp.NewSearchRequest(
-		conf.BaseDN,
-		lp.ScopeWholeSubtree,
-		lp.NeverDerefAliases,
-		0,
-		0,
-		false,
-		fmt.Sprintf("(&(objectClass=organizationalPerson)(%s=%s))", conf.UID, lp.EscapeFilter(username)),
-		[]string{"objectguid", conf.UID, conf.DisplayName, "userAccountControl"},
-		nil,
-	)
-
-	sr, err := l.Search(searchReq)
-	if err != nil {
-		return nil, fmt.Errorf("LDAP 用户查询失败: %w", err)
-	}
-
-	if len(sr.Entries) != 1 {
-		return nil, fmt.Errorf("用户不存在")
-	}
-
-	// 514-禁用 512-启用
-	if sr.Entries[0].GetAttributeValue("userAccountControl") == "514" {
-		return nil, errors.New("LDAP 用户账户已禁用")
-	}
-
-	authedUser := buildAuthedUserFromLDAPEntry(conf, sr.Entries[0])
-	return &authedUser, nil
+	return cb(l)
 }
 
 func (provider *Auth) Login(username, password string) (*auth.AuthedUser, error) {
-	log.WithFields(log.Fields{"username": username}).Debugf("ldap user login")
-
-	conf := provider.conf
-
-	l, err := lp.DialURL(conf.URL)
-	if err != nil {
-		return nil, fmt.Errorf("无法连接 LDAP 服务器: %w", err)
-	}
-
-	defer l.Close()
-
-	if err := l.Bind(conf.Username, conf.Password); err != nil {
-		return nil, fmt.Errorf("LDAP 服务器鉴权失败: %w", err)
-	}
-
-	searchReq := lp.NewSearchRequest(
-		conf.BaseDN,
-		lp.ScopeWholeSubtree,
-		lp.NeverDerefAliases,
-		0,
-		0,
-		false,
-		fmt.Sprintf("(&(objectClass=organizationalPerson)(%s=%s))", conf.UID, lp.EscapeFilter(username)),
-		[]string{"objectguid", conf.UID, conf.DisplayName, "userAccountControl"},
-		nil,
-	)
-
-	sr, err := l.Search(searchReq)
-	if err != nil {
-		return nil, fmt.Errorf("LDAP 用户查询失败: %w", err)
-	}
-
-	if len(sr.Entries) != 1 {
-		return nil, fmt.Errorf("用户不存在")
-	}
-
-	// 514-禁用 512-启用
-	if sr.Entries[0].GetAttributeValue("userAccountControl") == "514" {
-		return nil, errors.New("LDAP 用户账户已禁用")
-	}
-
-	if err := l.Bind(sr.Entries[0].DN, password); err != nil {
-		return nil, fmt.Errorf("用户密码错误: %w", err)
-	}
-
-	authedUser := buildAuthedUserFromLDAPEntry(conf, sr.Entries[0])
-	return &authedUser, nil
+	return provider.getUser(username, func(l *lp.Conn, user *auth.AuthedUser) error {
+		return l.Bind(username, password)
+	})
 }
 
 func buildAuthedUserFromLDAPEntry(conf *Config, entry *lp.Entry) auth.AuthedUser {
@@ -140,38 +117,35 @@ func buildAuthedUserFromLDAPEntry(conf *Config, entry *lp.Entry) auth.AuthedUser
 }
 
 func (provider *Auth) Users() ([]auth.AuthedUser, error) {
-	l, err := lp.DialURL(provider.conf.URL)
+	res, err := provider.getConnection(func(l *lp.Conn) (interface{}, error) {
+		searchReq := lp.NewSearchRequest(
+			provider.conf.BaseDN,
+			lp.ScopeWholeSubtree,
+			lp.NeverDerefAliases,
+			0,
+			0,
+			false,
+			fmt.Sprintf("(&(objectClass=organizationalPerson)(memberOf=%s))", lp.EscapeFilter(provider.conf.UserFilter)),
+			[]string{"objectguid", provider.conf.UID, provider.conf.DisplayName, "userAccountControl"},
+			nil,
+		)
+
+		sr, err := l.Search(searchReq)
+		if err != nil {
+			return nil, fmt.Errorf("LDAP 用户查询失败: %w", err)
+		}
+
+		authedUsers := make([]auth.AuthedUser, 0)
+		for _, ent := range sr.Entries {
+			authedUsers = append(authedUsers, buildAuthedUserFromLDAPEntry(provider.conf, ent))
+		}
+
+		return authedUsers, nil
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("无法连接 LDAP 服务器: %w", err)
+		return nil, err
 	}
 
-	defer l.Close()
-
-	if err := l.Bind(provider.conf.Username, provider.conf.Password); err != nil {
-		return nil, fmt.Errorf("LDAP 服务器鉴权失败: %w", err)
-	}
-
-	searchReq := lp.NewSearchRequest(
-		provider.conf.BaseDN,
-		lp.ScopeWholeSubtree,
-		lp.NeverDerefAliases,
-		0,
-		0,
-		false,
-		fmt.Sprintf("(&(objectClass=organizationalPerson)(memberOf=%s))", lp.EscapeFilter(provider.conf.UserFilter)),
-		[]string{"objectguid", provider.conf.UID, provider.conf.DisplayName, "userAccountControl"},
-		nil,
-	)
-
-	sr, err := l.Search(searchReq)
-	if err != nil {
-		return nil, fmt.Errorf("LDAP 用户查询失败: %w", err)
-	}
-
-	authedUsers := make([]auth.AuthedUser, 0)
-	for _, ent := range sr.Entries {
-		authedUsers = append(authedUsers, buildAuthedUserFromLDAPEntry(provider.conf, ent))
-	}
-
-	return authedUsers, nil
+	return res.([]auth.AuthedUser), nil
 }
