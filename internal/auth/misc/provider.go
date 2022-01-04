@@ -10,13 +10,10 @@ import (
 type Provider struct{}
 
 func (p Provider) Register(cc infra.Binder) {
-	cc.MustSingletonOverride(ldap.LDAPConfigBuilder())
-	cc.MustSingletonOverride(local.LocalConfigBuilder())
+	cc.MustSingletonOverride(ldap.ConfigBuilder())
+	cc.MustSingletonOverride(local.ConfigBuilder())
 
 	cc.MustSingletonOverride(New)
-}
-
-func (p Provider) Boot(cc infra.Resolver) {
 }
 
 func (p Provider) ShouldLoad(c infra.FlagContext) bool {

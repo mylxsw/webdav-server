@@ -11,9 +11,6 @@ func (p Provider) Register(cc infra.Binder) {
 	cc.MustSingletonOverride(NewMemoryCache)
 }
 
-func (p Provider) Boot(cc infra.Resolver) {
-}
-
 func (p Provider) ShouldLoad(c infra.FlagContext) bool {
 	return str.InIgnoreCase(c.String("cache-driver"), []string{"memory"})
 }
