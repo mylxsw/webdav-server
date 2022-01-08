@@ -10,7 +10,7 @@ require (
 require (
 	github.com/Azure/go-ntlmssp v0.0.0-20200615164410-66371956d46c // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.1 // indirect
-	github.com/mylxsw/glacier v0.0.0-20220104075827-4d7844cffd7f
+	github.com/mylxsw/glacier v0.0.0-20220108041543-860dc8c04490
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
 	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f
 )
@@ -22,7 +22,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mylxsw/asteria v0.0.0-20210617045030-e8ba894a8258 // indirect
-	github.com/mylxsw/container v0.0.0-20210615144611-b872ef1c3ecc // indirect
+	github.com/mylxsw/container v0.0.0-20220108024426-76a904a1a09b // indirect
 	github.com/mylxsw/graceful v0.0.0-20210318070625-a4a80fb77564 // indirect
 	github.com/prometheus/client_golang v1.11.0
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
