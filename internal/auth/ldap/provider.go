@@ -1,31 +1,19 @@
 package ldap
 
 import (
+	"github.com/mylxsw/asteria/log"
 	"github.com/mylxsw/glacier/infra"
 	"github.com/mylxsw/go-utils/str"
+	"github.com/mylxsw/webdav-server/internal/config"
 )
 
 type Provider struct{}
 
 func (p Provider) Register(cc infra.Binder) {
 	cc.MustSingletonOverride(New)
-	cc.MustSingletonOverride(ConfigBuilder())
+	log.Debugf("provider internal.auth.ldap loaded")
 }
 
-func (p Provider) ShouldLoad(c infra.FlagContext) bool {
-	return str.InIgnoreCase(c.String("auth"), []string{"ldap"})
-}
-
-func ConfigBuilder() func(c infra.FlagContext) *Config {
-	return func(c infra.FlagContext) *Config {
-		return &Config{
-			URL:         c.String("ldap-url"),
-			BaseDN:      c.String("ldap-basedn"),
-			Username:    c.String("ldap-username"),
-			Password:    c.String("ldap-password"),
-			DisplayName: "displayName",
-			UID:         "sAMAccountName",
-			UserFilter:  c.String("ldap-filter"),
-		}
-	}
+func (p Provider) ShouldLoad(config *config.Config) bool {
+	return str.InIgnoreCase(config.AuthType, []string{"ldap"})
 }

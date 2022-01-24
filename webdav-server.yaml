@@ -1,0 +1,30 @@
+listen: 127.0.0.1:8080
+auth_type: misc
+cache_driver: memory
+#log_path: /data/logs/webdav-server/%s.log
+
+server:
+  scope: /
+  prefix: /
+  no_sniff: false
+
+ldap:
+  url: ldap://127.0.0.1:389
+  base_dn: dc=example,dc=com
+  username: admin
+  password: admin
+  display_name: displayName
+  uid: sAMAccountName
+  user_filter: CN=all-staff,CN=Users,DC=example,DC=com
+
+users:
+  ignore_account_suffix: "@example.com"
+  local:
+    - username: admin
+      password: admin
+    - username: basic
+      password: YmFzaWM=
+      algo: base64
+    - username: editor
+      password: $2a$10$z.5uqyBDoqiCfLwccizy2ee5pRLhYPy/sDD.NReKLByKH/YzQFJNS
+      algo: bcrypt

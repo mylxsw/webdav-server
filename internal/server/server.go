@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"golang.org/x/net/webdav"
 	"net"
 	"net/http"
 	"strings"
@@ -14,27 +15,32 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type Server struct {
-	conf     *Config
+type Server interface {
+	Start(ctx context.Context, listener net.Listener)
+	ServeHTTP(w http.ResponseWriter, r *http.Request)
+}
+
+type webdavServer struct {
 	authSrv  service.AuthService
-	listener net.Listener
 	resolver infra.Resolver
-	auditLog log.Logger
+	log      log.Logger
+	handler  *webdav.Handler
 }
 
-func New(resolver infra.Resolver, conf *Config, authSrv service.AuthService, listener net.Listener) *Server {
-	return &Server{conf: conf, authSrv: authSrv, resolver: resolver, listener: listener, auditLog: log.Module("audit")}
-}
-
-func (server *Server) Start(ctx context.Context) {
+func New(resolver infra.Resolver, logger log.Logger, handler *webdav.Handler, authSrv service.AuthService) Server {
+	server := &webdavServer{log: logger, authSrv: authSrv, resolver: resolver, handler: handler}
 	http.HandleFunc("/", server.ServeHTTP)
 	http.Handle("/metrics", promhttp.Handler())
 
+	return server
+}
+
+func (server *webdavServer) Start(ctx context.Context, listener net.Listener) {
 	srv := &http.Server{Handler: http.DefaultServeMux}
 
 	stopped := make(chan interface{})
 	go func() {
-		if err := srv.Serve(tcpKeepAliveListener{server.listener.(*net.TCPListener)}); err != nil {
+		if err := srv.Serve(tcpKeepAliveListener{listener.(*net.TCPListener)}); err != nil {
 			log.Debugf("The http server has stopped: %v", err)
 
 			if err != http.ErrServerClosed {
@@ -50,10 +56,10 @@ func (server *Server) Start(ctx context.Context) {
 		case <-ctx.Done():
 			log.Warning("Prepare to shutdown...")
 			if err := srv.Shutdown(context.TODO()); err != nil {
-				log.Errorf("HTTP Server shutdown failed: %s", err.Error())
+				log.Errorf("HTTP webdavServer shutdown failed: %s", err.Error())
 			}
 
-			log.Warning("HTTP Server shutdown successful")
+			log.Warning("HTTP webdavServer shutdown successful")
 			return
 		case <-stopped:
 			return
@@ -61,85 +67,27 @@ func (server *Server) Start(ctx context.Context) {
 	}
 }
 
-func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (server *webdavServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 
-	reqOrigin := r.Header.Get("Origin")
-	if server.conf.Cors.Enabled && reqOrigin != "" {
-		headers := w.Header()
-
-		allowedHeaders := strings.Join(server.conf.Cors.AllowedHeaders, ", ")
-		allowedMethods := strings.Join(server.conf.Cors.AllowedMethods, ", ")
-		exposedHeaders := strings.Join(server.conf.Cors.ExposedHeaders, ", ")
-
-		allowAllHosts := len(server.conf.Cors.AllowedHosts) == 1 && server.conf.Cors.AllowedHosts[0] == "*"
-		allowedHost := server.isAllowedHost(server.conf.Cors.AllowedHosts, reqOrigin)
-
-		if allowAllHosts {
-			headers.Set("Access-Control-Allow-Origin", "*")
-		} else if allowedHost {
-			headers.Set("Access-Control-Allow-Origin", reqOrigin)
-		}
-
-		if allowAllHosts || allowedHost {
-			headers.Set("Access-Control-Allow-Headers", allowedHeaders)
-			headers.Set("Access-Control-Allow-Methods", allowedMethods)
-
-			if server.conf.Cors.Credentials {
-				headers.Set("Access-Control-Allow-Credentials", "true")
-			}
-
-			if len(server.conf.Cors.ExposedHeaders) > 0 {
-				headers.Set("Access-Control-Expose-Headers", exposedHeaders)
-			}
-		}
-	}
-
-	if r.Method == "OPTIONS" && server.conf.Cors.Enabled && reqOrigin != "" {
+	// Gets the correct user for this request.
+	username, password, ok := r.BasicAuth()
+	if !ok {
+		log.WithFields(log.Fields{"username": username}).Debug("not authorized: no auth header")
+		http.Error(w, "Not authorized", http.StatusUnauthorized)
 		return
 	}
 
-	currentUser := server.conf.DefaultUser
-	if server.conf.AuthEnabled {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-
-		// Gets the correct user for this request.
-		username, password, ok := r.BasicAuth()
-		if !ok {
-			log.WithFields(log.Fields{"username": username}).Debug("not authorized: no auth header")
-			http.Error(w, "Not authorized", http.StatusUnauthorized)
-			return
-		}
-
-		user, err := server.authSrv.Login(username, password)
-		if err != nil {
-			log.WithFields(log.Fields{"username": username}).Debugf("not authorized: %v", err)
-			http.Error(w, "Not authorized", http.StatusUnauthorized)
-			return
-		}
-
-		currentUser = authUserToWebdavUser(*user, server.conf)
-	} else {
-		if username, _, ok := r.BasicAuth(); ok {
-			if user, err := server.authSrv.GetUser(username); err == nil {
-				currentUser = authUserToWebdavUser(*user, server.conf)
-			}
-		}
-	}
-
-	// Checks for user permissions relatively to this PATH.
-	readonlyRequest := str.InIgnoreCase(r.Method, []string{"GET", "HEAD", "OPTIONS", "PROPFIND"})
-	requestPath := strings.TrimPrefix(r.URL.Path, currentUser.Handler.Prefix)
-
-	pathAccessMode := server.conf.AccessMode(requestPath)
-	if pathAccessMode == "" || (!readonlyRequest && pathAccessMode == "R") {
-		log.WithFields(log.Fields{"user": currentUser, "path_access_mode": pathAccessMode}).Debugf("path %s not allowed to access", r.URL.Path)
-		w.WriteHeader(http.StatusForbidden)
+	user, err := server.authSrv.Login(username, password)
+	if err != nil {
+		log.WithFields(log.Fields{"username": username}).Debugf("not authorized: %v", err)
+		http.Error(w, "Not authorized", http.StatusUnauthorized)
 		return
 	}
 
-	if !currentUser.Allowed(pathAccessMode, requestPath, readonlyRequest) {
-		log.WithFields(log.Fields{"user": currentUser, "path_access_mode": pathAccessMode}).Debugf("user %s not allowed to access %s", currentUser.Username, r.URL.Path)
-		w.WriteHeader(http.StatusForbidden)
+	if !user.HasPrivilege(r.Method, r.URL.Path) {
+		log.WithFields(log.Fields{"username": username}).Debugf("access denied: %v", err)
+		http.Error(w, "access denied", http.StatusForbidden)
 		return
 	}
 
@@ -156,17 +104,12 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		headers[k] = strings.Join(v, ", ")
 	}
 
-	logFields := log.Fields{
+	server.log.F(log.M{
 		"method":  r.Method,
 		"url":     r.RequestURI,
-		"user":    currentUser.Username,
+		"user":    user,
 		"headers": headers,
-	}
-	if readonlyRequest {
-		server.auditLog.WithFields(logFields).Debugf("%s %s %s", currentUser.Username, r.Method, r.RequestURI)
-	} else {
-		server.auditLog.WithFields(logFields).Infof("%s %s %s", currentUser.Username, r.Method, r.RequestURI)
-	}
+	}).Debugf("request")
 
 	// Excerpt from RFC4918, section 9.4:
 	//
@@ -175,8 +118,8 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//		the collection, or something else altogether.
 	//
 	// Get, when applied to collection, will return the same as PROPFIND method.
-	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, currentUser.Handler.Prefix) {
-		info, err := currentUser.Handler.FileSystem.Stat(context.TODO(), strings.TrimPrefix(r.URL.Path, currentUser.Handler.Prefix))
+	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, server.handler.Prefix) {
+		info, err := server.handler.FileSystem.Stat(context.TODO(), strings.TrimPrefix(r.URL.Path, server.handler.Prefix))
 		if err == nil && info.IsDir() {
 			r.Method = "PROPFIND"
 
@@ -188,16 +131,7 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Runs the WebDAV.
 	//u.Handler.LockSystem = webdav.NewMemLS()
-	currentUser.Handler.ServeHTTP(w, r)
-}
-
-func (server *Server) isAllowedHost(allowedHosts []string, origin string) bool {
-	for _, host := range allowedHosts {
-		if host == origin {
-			return true
-		}
-	}
-	return false
+	server.handler.ServeHTTP(w, r)
 }
 
 // responseWriterNoBody is a wrapper used to suppress the body of the response

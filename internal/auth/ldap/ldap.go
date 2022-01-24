@@ -3,6 +3,8 @@ package ldap
 import (
 	"errors"
 	"fmt"
+	"github.com/mylxsw/go-utils/str"
+	"github.com/mylxsw/webdav-server/internal/config"
 	"time"
 
 	lp "github.com/go-ldap/ldap/v3"
@@ -11,30 +13,27 @@ import (
 	"github.com/mylxsw/webdav-server/internal/auth"
 )
 
-type Config struct {
-	URL         string `json:"url,omitempty" yaml:"url,omitempty"`
-	BaseDN      string `json:"base_dn,omitempty" yaml:"base_dn,omitempty"`
-	Username    string `json:"username,omitempty" yaml:"username,omitempty"`
-	Password    string `json:"-" yaml:"password"`
-	DisplayName string `json:"display_name,omitempty" yaml:"display_name,omitempty"`
-	UID         string `json:"uid,omitempty" yaml:"uid,omitempty"`
-	UserFilter  string `json:"user_filter,omitempty" yaml:"user_filter,omitempty"`
-}
-
 type Auth struct {
-	conf   *Config
-	logger log.Logger
+	conf     *config.LDAP
+	userConf *config.Users
+	users    map[string]config.LDAPUser
+	logger   log.Logger
 }
 
-func New(conf *Config) auth.Auth {
-	return &Auth{conf: conf, logger: log.Module("auth:ldap")}
+func New(conf *config.LDAP, userConfig *config.Users) auth.Author {
+	users := make(map[string]config.LDAPUser)
+	for _, u := range userConfig.LDAP {
+		users[u.Account] = u
+	}
+
+	return &Auth{conf: conf, userConf: userConfig, logger: log.Module("auth:ldap"), users: users}
 }
 
 func (provider *Auth) GetUser(username string) (*auth.AuthedUser, error) {
 	return provider.getUser(username, nil)
 }
 
-func (provider *Auth) getUser(username string, cb func(l *lp.Conn, user *auth.AuthedUser) error) (*auth.AuthedUser, error) {
+func (provider *Auth) getUser(username string, cb func(l *lp.Conn, user *auth.AuthedUser, entry *lp.Entry) error) (*auth.AuthedUser, error) {
 	log.WithFields(log.Fields{"username": username}).Debugf("ldap get user")
 
 	res, err := provider.getConnection(func(l *lp.Conn) (interface{}, error) {
@@ -46,7 +45,7 @@ func (provider *Auth) getUser(username string, cb func(l *lp.Conn, user *auth.Au
 			0,
 			false,
 			fmt.Sprintf("(&(objectClass=organizationalPerson)(%s=%s))", provider.conf.UID, lp.EscapeFilter(username)),
-			[]string{"objectguid", provider.conf.UID, provider.conf.DisplayName, "userAccountControl"},
+			[]string{"objectguid", provider.conf.UID, provider.conf.DisplayName, "userAccountControl", "memberOf"},
 			nil,
 		)
 
@@ -64,10 +63,10 @@ func (provider *Auth) getUser(username string, cb func(l *lp.Conn, user *auth.Au
 			return nil, errors.New("LDAP 用户账户已禁用")
 		}
 
-		authedUser := buildAuthedUserFromLDAPEntry(provider.conf, sr.Entries[0])
+		authedUser := provider.buildAuthedUserFromLDAPEntry(sr.Entries[0])
 
 		if cb != nil {
-			if err := cb(l, &authedUser); err != nil {
+			if err := cb(l, &authedUser, sr.Entries[0]); err != nil {
 				return nil, err
 			}
 		}
@@ -97,23 +96,31 @@ func (provider *Auth) getConnection(cb func(l *lp.Conn) (interface{}, error)) (i
 }
 
 func (provider *Auth) Login(username, password string) (*auth.AuthedUser, error) {
-	return provider.getUser(username, func(l *lp.Conn, user *auth.AuthedUser) error {
-		return l.Bind(username, password)
+	return provider.getUser(username, func(l *lp.Conn, user *auth.AuthedUser, entry *lp.Entry) error {
+		return l.Bind(entry.DN, password)
 	})
 }
 
-func buildAuthedUserFromLDAPEntry(conf *Config, entry *lp.Entry) auth.AuthedUser {
+func (provider *Auth) buildAuthedUserFromLDAPEntry(entry *lp.Entry) auth.AuthedUser {
 	userStatus := 1
 	if entry.GetAttributeValue("userAccountControl") == "514" {
 		userStatus = 0
 	}
 
-	return auth.AuthedUser{
+	authedUser := auth.AuthedUser{
+		Type:    "ldap",
 		UUID:    uuid.Must(uuid.FromBytes(entry.GetRawAttributeValue("objectGUID"))).String(),
-		Name:    entry.GetAttributeValue(conf.DisplayName),
-		Account: entry.GetAttributeValue(conf.UID),
+		Name:    entry.GetAttributeValue(provider.conf.DisplayName),
+		Account: entry.DN,
+		Groups:  entry.GetAttributeValues("memberOf"),
 		Status:  int8(userStatus),
 	}
+
+	if user, ok := provider.users[entry.DN]; ok {
+		authedUser.Groups = str.Distinct(append(authedUser.Groups, user.GetUserGroups()...))
+	}
+
+	return authedUser
 }
 
 func (provider *Auth) Users() ([]auth.AuthedUser, error) {
@@ -126,7 +133,7 @@ func (provider *Auth) Users() ([]auth.AuthedUser, error) {
 			0,
 			false,
 			fmt.Sprintf("(&(objectClass=organizationalPerson)(memberOf=%s))", lp.EscapeFilter(provider.conf.UserFilter)),
-			[]string{"objectguid", provider.conf.UID, provider.conf.DisplayName, "userAccountControl"},
+			[]string{"objectguid", provider.conf.UID, provider.conf.DisplayName, "userAccountControl", "memberOf"},
 			nil,
 		)
 
@@ -137,7 +144,11 @@ func (provider *Auth) Users() ([]auth.AuthedUser, error) {
 
 		authedUsers := make([]auth.AuthedUser, 0)
 		for _, ent := range sr.Entries {
-			authedUsers = append(authedUsers, buildAuthedUserFromLDAPEntry(provider.conf, ent))
+			if ent.GetAttributeValue("userAccountControl") == "514" {
+				continue
+			}
+
+			authedUsers = append(authedUsers, provider.buildAuthedUserFromLDAPEntry(ent))
 		}
 
 		return authedUsers, nil

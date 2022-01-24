@@ -1,21 +1,19 @@
 package misc
 
 import (
+	"github.com/mylxsw/asteria/log"
 	"github.com/mylxsw/glacier/infra"
 	"github.com/mylxsw/go-utils/str"
-	"github.com/mylxsw/webdav-server/internal/auth/ldap"
-	"github.com/mylxsw/webdav-server/internal/auth/local"
+	"github.com/mylxsw/webdav-server/internal/config"
 )
 
 type Provider struct{}
 
 func (p Provider) Register(cc infra.Binder) {
-	cc.MustSingletonOverride(ldap.ConfigBuilder())
-	cc.MustSingletonOverride(local.ConfigBuilder())
-
 	cc.MustSingletonOverride(New)
+	log.Debugf("provider internal.auth.misc loaded")
 }
 
-func (p Provider) ShouldLoad(c infra.FlagContext) bool {
-	return str.InIgnoreCase(c.String("auth"), []string{"misc"})
+func (p Provider) ShouldLoad(config *config.Config) bool {
+	return str.InIgnoreCase(config.AuthType, []string{"misc"})
 }

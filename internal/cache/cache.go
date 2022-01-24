@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type Cache interface {
+type Driver interface {
 	Set(k string, x string, d time.Duration) error
 	Get(k string) (string, error)
 	Delete(k string) error

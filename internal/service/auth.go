@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -11,20 +12,19 @@ import (
 
 type AuthService interface {
 	Login(username, password string) (*auth.AuthedUser, error)
-	GetUser(username string) (*auth.AuthedUser, error)
 }
 
 type authService struct {
-	auth  auth.Auth
-	cache cache.Cache
+	author auth.Author
+	cache  cache.Driver
 }
 
-func NewAuthService(auth auth.Auth, cache cache.Cache) AuthService {
-	return &authService{auth: auth, cache: cache}
+func NewAuthService(author auth.Author, cache cache.Driver) AuthService {
+	return &authService{author: author, cache: cache}
 }
 
 func (srv *authService) Login(username, password string) (*auth.AuthedUser, error) {
-	cacheKey := fmt.Sprintf("webdav:login:%s:%s", username, password)
+	cacheKey := fmt.Sprintf("webdav:login:%s:%s", username, fmt.Sprintf("%x", md5.Sum([]byte(password+"-webdav.server"))))
 	cachedRaw, err := srv.cache.Get(cacheKey)
 	if err == nil {
 		var authedUser auth.AuthedUser
@@ -35,7 +35,7 @@ func (srv *authService) Login(username, password string) (*auth.AuthedUser, erro
 		return &authedUser, nil
 	}
 
-	authedUser, err := srv.auth.Login(username, password)
+	authedUser, err := srv.author.Login(username, password)
 	if err != nil {
 		return nil, err
 	}
@@ -45,36 +45,7 @@ func (srv *authService) Login(username, password string) (*auth.AuthedUser, erro
 		return nil, err
 	}
 
-	if err := srv.cache.Set(cacheKey, string(authedUserRaw), 5*time.Minute); err != nil {
-		return nil, err
-	}
-
-	return authedUser, nil
-}
-
-func (srv *authService) GetUser(username string) (*auth.AuthedUser, error) {
-	cacheKey := fmt.Sprintf("webdav:user:%s", username)
-	cachedRaw, err := srv.cache.Get(cacheKey)
-	if err != nil {
-		var authedUser auth.AuthedUser
-		if err := json.Unmarshal([]byte(cachedRaw), &authedUser); err != nil {
-			return nil, err
-		}
-
-		return &authedUser, nil
-	}
-
-	authedUser, err := srv.auth.GetUser(username)
-	if err != nil {
-		return nil, err
-	}
-
-	authedUserRaw, err := json.Marshal(authedUser)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := srv.cache.Set(cacheKey, string(authedUserRaw), 5*time.Minute); err != nil {
+	if err := srv.cache.Set(cacheKey, string(authedUserRaw), 15*time.Minute); err != nil {
 		return nil, err
 	}
 

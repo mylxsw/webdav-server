@@ -5,19 +5,29 @@ import (
 	"github.com/mylxsw/webdav-server/internal/auth"
 	"github.com/mylxsw/webdav-server/internal/auth/ldap"
 	"github.com/mylxsw/webdav-server/internal/auth/local"
+	"github.com/mylxsw/webdav-server/internal/config"
+	"strings"
 )
 
 type Auth struct {
 	logger    log.Logger
-	ldapAuth  auth.Auth
-	localAuth auth.Auth
+	ldapAuth  auth.Author
+	localAuth auth.Author
 }
 
-func New(ldapConf *ldap.Config, localConf *local.Config) auth.Auth {
-	return &Auth{logger: log.Module("auth:none"), ldapAuth: ldap.New(ldapConf), localAuth: local.New(localConf)}
+func New(ldapConf *config.LDAP, localConf *config.Users) auth.Author {
+	return &Auth{logger: log.Module("auth:misc"), ldapAuth: ldap.New(ldapConf, localConf), localAuth: local.New(localConf)}
 }
 
 func (provider *Auth) GetUser(username string) (*auth.AuthedUser, error) {
+	if strings.HasPrefix(username, "local:") {
+		return provider.localAuth.GetUser(strings.TrimPrefix(username, "local:"))
+	}
+
+	if strings.HasPrefix(username, "ldap:") {
+		return provider.ldapAuth.GetUser(strings.TrimPrefix(username, "ldap:"))
+	}
+
 	rs, err := provider.localAuth.GetUser(username)
 	if err != nil {
 		return provider.ldapAuth.GetUser(username)
@@ -27,6 +37,14 @@ func (provider *Auth) GetUser(username string) (*auth.AuthedUser, error) {
 }
 
 func (provider *Auth) Login(username, password string) (*auth.AuthedUser, error) {
+	if strings.HasPrefix(username, "local:") {
+		return provider.localAuth.Login(strings.TrimPrefix(username, "local:"), password)
+	}
+
+	if strings.HasPrefix(username, "ldap:") {
+		return provider.ldapAuth.Login(strings.TrimPrefix(username, "ldap:"), password)
+	}
+
 	rs, err := provider.localAuth.Login(username, password)
 	if err != nil {
 		return provider.ldapAuth.Login(username, password)

@@ -9,7 +9,7 @@ type Auth struct {
 	logger log.Logger
 }
 
-func New() auth.Auth {
+func New() auth.Author {
 	return &Auth{logger: log.Module("auth:none")}
 }
 
