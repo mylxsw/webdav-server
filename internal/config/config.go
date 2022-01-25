@@ -7,6 +7,14 @@ import (
 	"github.com/mylxsw/go-utils/str"
 	"gopkg.in/yaml.v3"
 	"io/ioutil"
+	"regexp"
+	"strings"
+)
+
+const (
+	AccessModeNone  = "none"
+	AccessModeRead  = "read"
+	AccessModeWrite = "write"
 )
 
 type Config struct {
@@ -22,15 +30,35 @@ type Config struct {
 	AuthType    string `json:"auth_type" yaml:"auth_type"`
 
 	Server Server `json:"server" yaml:"server"`
+	Rules  []Rule `json:"rules" yaml:"rules"`
 
 	LDAP  LDAP  `json:"ldap" yaml:"ldap,omitempty"`
 	Users Users `json:"users,omitempty" yaml:"users,omitempty"`
 }
 
+type UserGroupRules struct {
+	Users  map[string][]Rule
+	Groups map[string][]Rule
+}
+
+type Rule struct {
+	pattern *regexp.Regexp
+
+	Path       string   `json:"path" yaml:"path"`
+	AccessMode string   `json:"access_mode" yaml:"access_mode"`
+	Users      []string `json:"users,omitempty" yaml:"users,omitempty"`
+	Groups     []string `json:"groups,omitempty" yaml:"groups,omitempty"`
+}
+
+func (rule Rule) Matched(path string) bool {
+	return rule.pattern.MatchString(path)
+}
+
 type Server struct {
-	Scope   string `json:"scope" yaml:"scope"`
-	Prefix  string `json:"prefix" yaml:"prefix"`
-	NoSniff bool   `json:"no_sniff" yaml:"no_sniff"`
+	Scope      string `json:"scope" yaml:"scope"`
+	Prefix     string `json:"prefix" yaml:"prefix"`
+	NoSniff    bool   `json:"no_sniff" yaml:"no_sniff"`
+	AccessMode string `json:"access_mode" yaml:"access_mode,omitempty"`
 }
 
 // populateDefault 填充默认值
@@ -55,6 +83,18 @@ func (conf Config) populateDefault() Config {
 		conf.LDAP.UserFilter = "CN=all-staff,CN=Users,DC=example,DC=com"
 	}
 
+	if conf.Server.AccessMode == "" {
+		conf.Server.AccessMode = AccessModeRead
+	}
+	conf.Server.AccessMode = strings.ToLower(conf.Server.AccessMode)
+
+	for i, rule := range conf.Rules {
+		conf.Rules[i].pattern = regexp.MustCompilePOSIX(rule.Path)
+		if rule.AccessMode == "" {
+			conf.Rules[i].AccessMode = AccessModeRead
+		}
+	}
+
 	return conf
 }
 
@@ -71,6 +111,16 @@ func (conf Config) validate() error {
 
 		if conf.KeyFile == "" {
 			return fmt.Errorf("invalid key_file: key_file is required when https=true")
+		}
+	}
+
+	if !str.In(conf.Server.AccessMode, []string{AccessModeNone, AccessModeRead, AccessModeWrite}) {
+		return fmt.Errorf("invalid server.access_mode: must be one of none|read|write")
+	}
+
+	for i, rule := range conf.Rules {
+		if _, err := regexp.CompilePOSIX(rule.Path); err != nil {
+			return fmt.Errorf("invalid rules[%d].path: %v", i, err)
 		}
 	}
 

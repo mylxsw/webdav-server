@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"github.com/mylxsw/webdav-server/internal/config"
 	"golang.org/x/net/webdav"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +20,6 @@ import (
 
 type Server interface {
 	Start(ctx context.Context, listener net.Listener)
-	ServeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 type webdavServer struct {
@@ -30,8 +31,11 @@ type webdavServer struct {
 
 func New(resolver infra.Resolver, logger log.Logger, handler *webdav.Handler, authSrv service.AuthService) Server {
 	server := &webdavServer{log: logger, authSrv: authSrv, resolver: resolver, handler: handler}
-	http.HandleFunc("/", server.ServeHTTP)
-	http.Handle("/metrics", promhttp.Handler())
+
+	resolver.MustResolve(func(conf *config.Config, userGroupRules *config.UserGroupRules) {
+		http.HandleFunc("/", server.buildHandler(conf, userGroupRules))
+		http.Handle("/metrics", promhttp.Handler())
+	})
 
 	return server
 }
@@ -74,71 +78,143 @@ func (server *webdavServer) Start(ctx context.Context, listener net.Listener) {
 	}
 }
 
-func (server *webdavServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+func (server *webdavServer) buildHandler(conf *config.Config, userGroupRules *config.UserGroupRules) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 
-	// Gets the correct user for this request.
-	username, password, ok := r.BasicAuth()
-	if !ok {
-		log.WithFields(log.Fields{"username": username}).Debug("not authorized: no auth header")
-		http.Error(w, "Not authorized", http.StatusUnauthorized)
-		return
-	}
-
-	user, err := server.authSrv.Login(username, password)
-	if err != nil {
-		log.WithFields(log.Fields{"username": username}).Debugf("not authorized: %v", err)
-		http.Error(w, "Not authorized", http.StatusUnauthorized)
-		return
-	}
-
-	if !user.HasPrivilege(r.Method, r.URL.Path) {
-		log.WithFields(log.Fields{"username": username}).Debugf("access denied: %v", err)
-		http.Error(w, "access denied", http.StatusForbidden)
-		return
-	}
-
-	if r.Method == "HEAD" {
-		w = newResponseWriterNoBody(w)
-	}
-
-	headers := make(map[string]string)
-	for k, v := range r.Header {
-		if str.InIgnoreCase(k, []string{"Authorization", "Accept-Language", "Content-Length", "Accept", "Connection", "Accept-Encoding", "Content-Type"}) {
-			continue
+		// Gets the correct user for this request.
+		username, password, ok := r.BasicAuth()
+		if !ok {
+			log.WithFields(log.Fields{"username": username}).Debug("not authorized: no auth header")
+			http.Error(w, "Not authorized", http.StatusUnauthorized)
+			return
 		}
 
-		headers[k] = strings.Join(v, ", ")
-	}
+		user, err := server.authSrv.Login(username, password)
+		if err != nil {
+			log.WithFields(log.Fields{"username": username}).Debugf("not authorized: %v", err)
+			http.Error(w, "Not authorized", http.StatusUnauthorized)
+			return
+		}
 
-	server.log.F(log.M{
-		"method":  r.Method,
-		"url":     r.RequestURI,
-		"user":    user,
-		"headers": headers,
-	}).Debugf("request")
+		headers := make(map[string]string)
+		for k, v := range r.Header {
+			if str.InIgnoreCase(k, []string{"Authorization", "Accept-Language", "Content-Length", "Accept", "Connection", "Accept-Encoding", "Content-Type"}) {
+				continue
+			}
 
-	// Excerpt from RFC4918, section 9.4:
-	//
-	// 		GET, when applied to a collection, may return the contents of an
-	//		"index.html" resource, a human-readable view of the contents of
-	//		the collection, or something else altogether.
-	//
-	// Get, when applied to collection, will return the same as PROPFIND method.
-	if r.Method == "GET" && strings.HasPrefix(r.URL.Path, server.handler.Prefix) {
-		info, err := server.handler.FileSystem.Stat(context.TODO(), strings.TrimPrefix(r.URL.Path, server.handler.Prefix))
-		if err == nil && info.IsDir() {
-			r.Method = "PROPFIND"
+			headers[k] = strings.Join(v, ", ")
+		}
 
-			if r.Header.Get("Depth") == "" {
-				r.Header.Add("Depth", "1")
+		targetResponse := &responseWriterWrap{
+			Headers:    make(http.Header),
+			body:       bytes.NewBuffer([]byte{}),
+			StatusCode: 0,
+		}
+
+		defer func() {
+			resp := targetResponse.RealWrite(w)
+			fields := log.M{
+				"request": log.M{
+					"method":  r.Method,
+					"url":     r.RequestURI,
+					"user":    user,
+					"headers": headers,
+				},
+			}
+
+			if conf.Verbose {
+				fields["response"] = resp
+			} else {
+				fields["response"] = log.M{
+					"status_code": resp.StatusCode,
+				}
+			}
+
+			log.F(fields).Debugf("request")
+		}()
+
+		if !user.HasPrivilege(conf, userGroupRules, r.Method, r.URL.Path) {
+			log.WithFields(log.Fields{"username": username}).Debugf("access denied: %v", err)
+			http.Error(targetResponse, "access denied", http.StatusForbidden)
+			return
+		}
+
+		if r.Method == "HEAD" {
+			w = newResponseWriterNoBody(targetResponse)
+		}
+
+		// Excerpt from RFC4918, section 9.4:
+		//
+		// 		GET, when applied to a collection, may return the contents of an
+		//		"index.html" resource, a human-readable view of the contents of
+		//		the collection, or something else altogether.
+		//
+		// Get, when applied to collection, will return the same as PROPFIND method.
+		if r.Method == "GET" && strings.HasPrefix(r.URL.Path, server.handler.Prefix) {
+			info, err := server.handler.FileSystem.Stat(context.TODO(), strings.TrimPrefix(r.URL.Path, server.handler.Prefix))
+			if err == nil && info.IsDir() {
+				r.Method = "PROPFIND"
+
+				if r.Header.Get("Depth") == "" {
+					r.Header.Add("Depth", "1")
+				}
 			}
 		}
+
+		// Runs the WebDAV.
+		//u.Handler.LockSystem = webdav.NewMemLS()
+		server.handler.ServeHTTP(targetResponse, r)
+	}
+}
+
+// responseWriterWrap http.ResponseWriter 实现，用于存储代理请求返回数据，避免直接发送给客户端
+type responseWriterWrap struct {
+	Headers    http.Header
+	body       *bytes.Buffer
+	Body       []byte
+	StatusCode int
+}
+
+type response struct {
+	StatusCode int    `json:"status_code"`
+	Body       string `json:"body"`
+}
+
+func (rw *responseWriterWrap) RealWrite(w http.ResponseWriter) response {
+	body := rw.body.Bytes()
+	for k, v := range rw.Header() {
+		for _, vv := range v {
+			w.Header().Add(k, vv)
+		}
 	}
 
-	// Runs the WebDAV.
-	//u.Handler.LockSystem = webdav.NewMemLS()
-	server.handler.ServeHTTP(w, r)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if rw.StatusCode > 0 {
+		w.WriteHeader(rw.StatusCode)
+	}
+
+	_, _ = w.Write(body)
+
+	return response{
+		StatusCode: rw.StatusCode,
+		Body:       string(body),
+	}
+}
+
+// Header 实现 http.ResponseWriter 接口
+func (rw *responseWriterWrap) Header() http.Header {
+	return rw.Headers
+}
+
+// Write 实现 http.ResponseWriter 接口
+func (rw *responseWriterWrap) Write(bytes []byte) (int, error) {
+	return rw.body.Write(bytes)
+}
+
+// WriteHeader 实现 http.ResponseWriter 接口
+func (rw *responseWriterWrap) WriteHeader(statusCode int) {
+	rw.StatusCode = statusCode
 }
 
 // responseWriterNoBody is a wrapper used to suppress the body of the response

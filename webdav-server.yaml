@@ -1,4 +1,7 @@
 listen: 127.0.0.1:8080
+https: false
+cert_file: ""
+key_file: ""
 auth_type: misc
 cache_driver: memory
 #log_path: /data/logs/webdav-server/%s.log
@@ -7,6 +10,28 @@ server:
   scope: /
   prefix: /
   no_sniff: false
+  # 默认权限，支持 read/write/none
+  access_mode: read
+
+# 用户权限规则
+rules:
+  - path: /build/.*
+    access_mode: write
+    groups:
+      - editor
+  - path: .*
+    access_mode: read
+    groups:
+      - vistor
+      - editor
+  - path: .*
+    access_mode: write
+    groups:
+      - admin
+  - path: /internal/.*
+    access_mode: write
+    groups:
+      - admin
 
 ldap:
   url: ldap://127.0.0.1:389
@@ -22,9 +47,21 @@ users:
   local:
     - username: admin
       password: admin
+      groups:
+        - admin
     - username: basic
       password: YmFzaWM=
       algo: base64
+      groups:
+        - vistor
     - username: editor
       password: $2a$10$z.5uqyBDoqiCfLwccizy2ee5pRLhYPy/sDD.NReKLByKH/YzQFJNS
       algo: bcrypt
+      groups:
+        - editor
+    - account: guanyiyao
+      password: guanyiyao
+    - account: xiaoming
+      password: xiaoming
+      groups:
+        - vistor
