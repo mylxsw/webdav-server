@@ -10,8 +10,13 @@ import (
 )
 
 type Config struct {
-	Verbose     bool   `json:"verbose" yaml:"verbose,omitempty"`
-	Listen      string `json:"listen" yaml:"listen,omitempty"`
+	Verbose bool `json:"verbose" yaml:"verbose,omitempty"`
+
+	Listen   string `json:"listen" yaml:"listen,omitempty"`
+	HTTPS    bool   `json:"https" yaml:"https,omitempty"`
+	CertFile string `json:"cert_file" yaml:"cert_file"`
+	KeyFile  string `json:"key_file" yaml:"key_file"`
+
 	LogPath     string `json:"log_path" yaml:"log_path,omitempty"`
 	CacheDriver string `json:"cache_driver" yaml:"cache_driver"`
 	AuthType    string `json:"auth_type" yaml:"auth_type"`
@@ -57,6 +62,16 @@ func (conf Config) populateDefault() Config {
 func (conf Config) validate() error {
 	if !str.In(conf.AuthType, []string{"misc", "ldap", "local"}) {
 		return fmt.Errorf("invalid auth_type: must be one of misc|local|ldap")
+	}
+
+	if conf.HTTPS {
+		if conf.CertFile == "" {
+			return fmt.Errorf("invalid cert_file: cert_file is required when https=true")
+		}
+
+		if conf.KeyFile == "" {
+			return fmt.Errorf("invalid key_file: key_file is required when https=true")
+		}
 	}
 
 	return nil

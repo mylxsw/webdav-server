@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"github.com/mylxsw/webdav-server/internal/config"
 	"golang.org/x/net/webdav"
 	"net"
 	"net/http"
@@ -39,8 +40,14 @@ func (server *webdavServer) Start(ctx context.Context, listener net.Listener) {
 	srv := &http.Server{Handler: http.DefaultServeMux}
 
 	stopped := make(chan interface{})
-	go func() {
-		if err := srv.Serve(tcpKeepAliveListener{listener.(*net.TCPListener)}); err != nil {
+	go server.resolver.MustResolve(func(conf *config.Config) {
+		var err error
+		if conf.HTTPS {
+			err = srv.ServeTLS(tcpKeepAliveListener{listener.(*net.TCPListener)}, conf.CertFile, conf.KeyFile)
+		} else {
+			err = srv.Serve(tcpKeepAliveListener{listener.(*net.TCPListener)})
+		}
+		if err != nil {
 			log.Debugf("The http server has stopped: %v", err)
 
 			if err != http.ErrServerClosed {
@@ -49,7 +56,7 @@ func (server *webdavServer) Start(ctx context.Context, listener net.Listener) {
 		}
 
 		stopped <- struct{}{}
-	}()
+	})
 
 	for {
 		select {
