@@ -20,10 +20,11 @@ const (
 type Config struct {
 	Verbose bool `json:"verbose" yaml:"verbose,omitempty"`
 
-	Listen   string `json:"listen" yaml:"listen,omitempty"`
-	HTTPS    bool   `json:"https" yaml:"https,omitempty"`
-	CertFile string `json:"cert_file" yaml:"cert_file"`
-	KeyFile  string `json:"key_file" yaml:"key_file"`
+	Listen             string `json:"listen" yaml:"listen,omitempty"`
+	HTTPS              bool   `json:"https" yaml:"https"`
+	CertFile           string `json:"cert_file" yaml:"cert_file"`
+	KeyFile            string `json:"key_file" yaml:"key_file"`
+	ClientRealIPHeader string `json:"client_ip_header" yaml:"client_ip_header,omitempty"`
 
 	LogPath     string `json:"log_path" yaml:"log_path,omitempty"`
 	CacheDriver string `json:"cache_driver" yaml:"cache_driver"`
@@ -63,6 +64,10 @@ type Server struct {
 
 // populateDefault 填充默认值
 func (conf Config) populateDefault() Config {
+	if conf.Server.Scope == "" {
+		conf.Server.Scope = "."
+	}
+
 	if conf.AuthType == "" {
 		conf.AuthType = "misc"
 	}

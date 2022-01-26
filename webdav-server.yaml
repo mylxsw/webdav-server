@@ -2,37 +2,31 @@ listen: 127.0.0.1:8080
 https: false
 cert_file: ""
 key_file: ""
-auth_type: misc
 cache_driver: memory
-#log_path: /data/logs/webdav-server/%s.log
-
+auth_type: misc
 server:
   scope: /
   prefix: /
   no_sniff: false
-  # 默认权限，支持 read/write/none
   access_mode: read
-
-# 用户权限规则
 rules:
-  - path: /build/.*
-    access_mode: write
-    groups:
-      - editor
-  - path: .*
-    access_mode: read
-    groups:
-      - vistor
-      - editor
-  - path: .*
-    access_mode: write
-    groups:
-      - admin
-  - path: /internal/.*
-    access_mode: write
-    groups:
-      - admin
-
+- path: /build/.*
+  access_mode: write
+  groups:
+  - editor
+- path: .*
+  access_mode: read
+  groups:
+  - vistor
+  - editor
+- path: .*
+  access_mode: write
+  groups:
+  - admin
+- path: /internal/.*
+  access_mode: write
+  groups:
+  - admin
 ldap:
   url: ldap://127.0.0.1:389
   base_dn: dc=example,dc=com
@@ -41,27 +35,34 @@ ldap:
   display_name: displayName
   uid: sAMAccountName
   user_filter: CN=all-staff,CN=Users,DC=example,DC=com
-
 users:
-  ignore_account_suffix: "@example.com"
+  ignore_account_suffix: '@example.com'
   local:
-    - username: admin
-      password: admin
-      groups:
-        - admin
-    - username: basic
-      password: YmFzaWM=
-      algo: base64
-      groups:
-        - vistor
-    - username: editor
-      password: $2a$10$z.5uqyBDoqiCfLwccizy2ee5pRLhYPy/sDD.NReKLByKH/YzQFJNS
-      algo: bcrypt
-      groups:
-        - editor
-    - account: guanyiyao
-      password: guanyiyao
-    - account: xiaoming
-      password: xiaoming
-      groups:
-        - vistor
+  - name: 管理员
+    account: admin
+    password: $2a$10$1/6S/eH/9M55ZM41WiT0yepaIDFefyN16G5zSGhIseenutDTX7aQa
+    groups:
+    - admin
+    algo: bcrypt
+  - name: 基础用户
+    account: basic
+    password: YmFzaWM=
+    groups:
+    - vistor
+    algo: base64
+  - name: 编辑
+    account: editor
+    password: $2a$10$z.5uqyBDoqiCfLwccizy2ee5pRLhYPy/sDD.NReKLByKH/YzQFJNS
+    groups:
+    - editor
+    algo: bcrypt
+  - name: 管宜尧
+    account: guanyiyao
+    password: $2a$10$p4C4etraJmur/VKExqmd6eVq33wT/b/ZXjC0GlRaQkCKqg4F4tq16
+    algo: bcrypt
+  - name: 小明
+    account: xiaoming
+    password: $2a$10$AAXuU1oltqBl/bdDWjydreb/SUDNRw14HiPmjwSVmucVDJ1N/pQwK
+    groups:
+    - vistor
+    algo: bcrypt

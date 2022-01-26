@@ -112,29 +112,33 @@ func (server *webdavServer) buildHandler(conf *config.Config, userGroupRules *co
 			StatusCode: 0,
 		}
 
+		var clientIP string
+		if conf.ClientRealIPHeader != "" {
+			// 如从请求头 X-Forwarded-For 中获取真实 IP，列表中第一个 IP 为真实的客户端 IP 地址
+			clientIP = strings.Split(r.Header.Get(conf.ClientRealIPHeader), ",")[0]
+		}
+
+		if clientIP == "" {
+			clientIP = strings.Split(r.RemoteAddr, ":")[0]
+		}
+
+		readonlyRequest := str.InIgnoreCase(r.Method, []string{"GET", "HEAD", "OPTIONS", "PROPFIND"})
 		defer func() {
 			resp := targetResponse.RealWrite(w)
-			fields := log.M{
+			log.F(log.M{
+				"readonly": readonlyRequest,
+				"remote":   clientIP,
+				"user":     user,
 				"request": log.M{
 					"method":  r.Method,
 					"url":     r.RequestURI,
-					"user":    user,
 					"headers": headers,
 				},
-			}
-
-			if conf.Verbose {
-				fields["response"] = resp
-			} else {
-				fields["response"] = log.M{
-					"status_code": resp.StatusCode,
-				}
-			}
-
-			log.F(fields).Debugf("request")
+				"response": resp,
+			}).Debugf("request")
 		}()
 
-		if !user.HasPrivilege(conf, userGroupRules, r.Method, r.URL.Path) {
+		if !user.HasPrivilege(conf, userGroupRules, readonlyRequest, r.URL.Path) {
 			log.WithFields(log.Fields{"username": username}).Debugf("access denied: %v", err)
 			http.Error(targetResponse, "access denied", http.StatusForbidden)
 			return

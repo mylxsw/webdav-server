@@ -2,8 +2,6 @@ package auth
 
 import (
 	"errors"
-	"github.com/mylxsw/asteria/log"
-	"github.com/mylxsw/go-utils/str"
 	"github.com/mylxsw/webdav-server/internal/config"
 )
 
@@ -22,16 +20,13 @@ type AuthedUser struct {
 	Status  int8     `json:"status" yaml:"status"`
 }
 
-func (user AuthedUser) HasPrivilege(conf *config.Config, userGroupRules *config.UserGroupRules, method string, requestPath string) bool {
-	log.F(log.M{"method": method, "path": requestPath, "user": user.Account, "groups": user.Groups}).Debugf("check privileges")
-
+func (user AuthedUser) HasPrivilege(conf *config.Config, userGroupRules *config.UserGroupRules, readonlyRequest bool, requestPath string) bool {
 	// server=write
 	if conf.Server.AccessMode == config.AccessModeWrite {
 		return true
 	}
 
 	// server=read, read request
-	readonlyRequest := str.InIgnoreCase(method, []string{"GET", "HEAD", "OPTIONS", "PROPFIND"})
 	if conf.Server.AccessMode == config.AccessModeRead && readonlyRequest {
 		return true
 	}
