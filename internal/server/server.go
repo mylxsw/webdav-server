@@ -97,15 +97,6 @@ func (server *webdavServer) buildHandler(conf *config.Config, userGroupRules *co
 			return
 		}
 
-		headers := make(map[string]string)
-		for k, v := range r.Header {
-			if str.InIgnoreCase(k, []string{"Authorization", "Accept-Language", "Content-Length", "Accept", "Connection", "Accept-Encoding", "Content-Type"}) {
-				continue
-			}
-
-			headers[k] = strings.Join(v, ", ")
-		}
-
 		targetResponse := &responseWriterWrap{
 			Headers:    make(http.Header),
 			body:       bytes.NewBuffer([]byte{}),
@@ -124,15 +115,18 @@ func (server *webdavServer) buildHandler(conf *config.Config, userGroupRules *co
 
 		readonlyRequest := str.InIgnoreCase(r.Method, []string{"GET", "HEAD", "OPTIONS", "PROPFIND"})
 		defer func() {
-			resp := targetResponse.RealWrite(w)
+			resp := targetResponse.RealWrite(w, conf.Verbose)
 			log.F(log.M{
 				"readonly": readonlyRequest,
 				"remote":   clientIP,
-				"user":     user,
+				"user": log.M{
+					"name":    user.Name,
+					"account": user.Account,
+				},
 				"request": log.M{
-					"method":  r.Method,
-					"url":     r.RequestURI,
-					"headers": headers,
+					"method": r.Method,
+					"url":    r.RequestURI,
+					"ua":     r.Header.Get("User-Agent"),
 				},
 				"response": resp,
 			}).Debugf("request")
@@ -182,10 +176,10 @@ type responseWriterWrap struct {
 
 type response struct {
 	StatusCode int    `json:"status_code"`
-	Body       string `json:"body"`
+	Body       string `json:"body,omitempty"`
 }
 
-func (rw *responseWriterWrap) RealWrite(w http.ResponseWriter) response {
+func (rw *responseWriterWrap) RealWrite(w http.ResponseWriter, verbose bool) response {
 	body := rw.body.Bytes()
 	for k, v := range rw.Header() {
 		for _, vv := range v {
@@ -200,10 +194,14 @@ func (rw *responseWriterWrap) RealWrite(w http.ResponseWriter) response {
 
 	_, _ = w.Write(body)
 
-	return response{
-		StatusCode: rw.StatusCode,
-		Body:       string(body),
+	if verbose {
+		return response{
+			StatusCode: rw.StatusCode,
+			Body:       string(body),
+		}
 	}
+
+	return response{StatusCode: rw.StatusCode}
 }
 
 // Header 实现 http.ResponseWriter 接口

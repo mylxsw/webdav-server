@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/mylxsw/webdav-server/internal/config"
-	"path/filepath"
 	"time"
 
 	"github.com/mylxsw/asteria/formatter"
@@ -39,7 +38,7 @@ func main() {
 		return resolver.Resolve(func(conf *config.Config) {
 			if conf.LogPath != "" {
 				log.All().LogWriter(writer.NewDefaultRotatingFileWriter(context.TODO(), func(le level.Level, module string) string {
-					return filepath.Join(conf.LogPath, fmt.Sprintf("%s-%s.log", time.Now().Format("20060102"), le.GetLevelName()))
+					return fmt.Sprintf(conf.LogPath, fmt.Sprintf("%s-%s", le.GetLevelName(), time.Now().Format("20060102")))
 				}))
 			}
 		})
